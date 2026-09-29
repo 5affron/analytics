@@ -129,6 +129,12 @@ def _chart_colors(segments: list[str], organisation_colors: dict[str, str] | Non
     return colors
 
 
+def segment_colors(segments: list[str]) -> dict[str, str]:
+    """The colours the composition PNGs give ``segments``, for the interactive charts."""
+    colors = _chart_colors(segments, _composition_colors(list(load_affiliations().values())))
+    return {segment: colors[segment] for segment in segments if segment in colors}
+
+
 def _percent_rows(df, value_cols):
     """Copy of ``df`` with each row's ``value_cols`` rescaled to sum to 100 (percent)."""
     out = df.copy()
@@ -264,13 +270,14 @@ def _team_composition_chart(team_membership, affiliations, data_dir, charts_dir,
         )
 
 
-def _single_employer_chart(team_membership, affiliations, charts_dir, *, suffix, title, organisation_colors):
+def _single_employer_chart(team_membership, affiliations, data_dir, charts_dir, *, suffix, title, organisation_colors):
     """Single-employer teams by controlling org, as a bar (possibly active-filtered)."""
     diversity = build_team_affiliation_diversity(team_membership, affiliations)
     plot_and_save(
         build_single_employer_team_counts(diversity),
         plot_bar,
         output_path=charts_dir / f"single_employer_teams_by_org{suffix}.png",
+        csv_path=data_dir / f"single_employer_teams_by_org{suffix}.csv",
         x_col="organisation",
         y_col="teams",
         title=title,
@@ -286,6 +293,7 @@ def _repo_diversity_views(role_lookup, affiliations, data_dir, charts_dir, *, ro
         build_single_employer_repo_counts(diversity, count_col=role_column(role)),
         plot_bar,
         output_path=charts_dir / f"single_employer_repos_by_org{suffix}.png",
+        csv_path=data_dir / f"single_employer_repos_by_org{suffix}.csv",
         x_col="organisation",
         y_col="repos",
         title=title,
@@ -484,6 +492,7 @@ def main(org: str = ORG) -> None:
     _single_employer_chart(
         team_membership,
         affiliations,
+        org_data_dir,
         org_charts_dir,
         suffix="",
         title=f"{org} — single-employer governance teams, by controlling organisation",

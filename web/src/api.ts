@@ -12,7 +12,16 @@
  * compile-time error here and a test failure on the Python side.
  */
 export type ColumnFormat =
-  'hip' | 'date' | 'link' | 'evidence' | 'status' | 'flag' | 'presence' | 'number' | 'staleness';
+  | 'hip'
+  | 'date'
+  | 'link'
+  | 'evidence'
+  | 'status'
+  | 'flag'
+  | 'presence'
+  | 'number'
+  | 'percent'
+  | 'staleness';
 
 export interface ColumnSpec {
   key: string;
@@ -41,13 +50,151 @@ export interface SectionRef {
   absorbed_by?: string;
 }
 
-export interface ChartVariant {
+/** One drawn series; `color` is a hex value or a `var(--token)` reference. */
+export interface ChartSeries {
+  key: string;
   label: string;
+  color: string;
+}
+
+/** A value shown beside the series in the tooltip and table, never drawn. */
+export interface ChartDetail {
+  key: string;
+  label: string;
+  format: 'number' | 'decimal' | 'percent';
+}
+
+/** Fields every interactive chart document shares (see export/chart_data.py). */
+export interface ChartDocumentMeta {
+  schema_version: 1;
+  id: string;
+  org: string;
+  source: string;
+  metric: string;
+  unit: string;
+  /** Who is counted and how; always shown, independently of the chart note. */
+  population: string;
+  /** What the rows can be sliced by; the UI offers nothing else. */
+  dimensions: string[];
+  note?: string;
+  methodology?: string[];
+  generated_at?: string;
+  stale?: boolean;
+}
+
+/** `trailing`: the `days` before `end`; `all`: every event; `snapshot`: the state at `end`. */
+export interface ChartWindow {
+  kind: 'snapshot' | 'all' | 'trailing';
+  days: number | null;
+  end: string | null;
+}
+
+/** Bars, lines and areas over periods or categories. */
+interface ChartDocumentBase extends ChartDocumentMeta {
+  /** `meter` (statuses, headline first) and `funnel` (stages in order) are single-series. */
+  mark: 'bar' | 'line' | 'area' | 'meter' | 'funnel';
+  stacked: boolean;
+  /** Draw each row as shares of its visible total; the table keeps counts. */
+  normalize: boolean;
+  orientation: 'vertical' | 'horizontal';
+  value_format: 'integer' | 'decimal';
+  /** Re-rank rows by the series on show, rather than keeping the source order. */
+  rank: boolean;
+  /** Rows charted before "Show all"; the data view always lists every row. */
+  top_n: number | null;
+  reference: { value: number; label: string } | null;
+  /** A bounded scale's ceiling (e.g. 10 for a 0–10 score). */
+  value_max?: number | null;
+  category: { key: string; label: string };
+  series: ChartSeries[];
+  details: ChartDetail[];
+}
+
+export interface TimeseriesDocument extends ChartDocumentBase {
+  kind: 'timeseries';
+  mark: 'bar' | 'line' | 'area';
+  /** `snapshot`: point-in-time measurements on the listed dates, never gap-filled. */
+  frequency: 'year' | 'month' | 'week' | 'day' | 'snapshot';
+  timezone: 'UTC';
+  /** The last complete bucket and the one before it; null when no fair pair exists. */
+  comparison: { current: string; previous: string } | null;
+  group: null;
+  window: { kind: 'calendar'; first: string | null; last: string | null };
+  rows: (Row & { bucket: string; partial: boolean })[];
+}
+
+export interface CategoriesDocument extends ChartDocumentBase {
+  kind: 'categories';
+  /** Rows split by a reader-selected value (e.g. a funnel cohort); never combined. */
+  group: { key: string; label: string; default: string; values: string[] } | null;
+  window: ChartWindow;
+  rows: Row[];
+}
+
+/** A heatmap: one row per entity, one value per column, on an explicit linear scale. */
+export interface MatrixDocument extends ChartDocumentMeta {
+  kind: 'matrix';
+  row: { key: string; label: string };
+  sublabel: { key: string; label: string } | null;
+  /** A per-row summary (e.g. the six-month score), shown but never coloured. */
+  total: { key: string; label: string } | null;
+  columns: { key: string; label: string }[];
+  value_label: string;
+  /** Linear from `min` to `max`, drawn in `steps` equal shades. */
+  scale: { min: number; max: number; steps: number };
+  /** What a null cell means (e.g. "Not scored"); null when every cell has a value. */
+  missing: string | null;
+  /** Row keys are GitHub logins: show avatars and profile links. */
+  avatars: boolean;
+  top_n: number | null;
+  value_format: 'integer' | 'decimal';
+  window: ChartWindow;
+  rows: Row[];
+}
+
+export interface NetworkNode {
+  id: string;
+  /** Members active in the repository recently: the bubble size. */
+  active: number;
+  total: number;
+  category: string;
+  /** Precomputed layout position (y up). */
+  x: number;
+  y: number;
+}
+
+/** Repositories linked by shared members, with a precomputed layout. */
+export interface NetworkDocument extends ChartDocumentMeta {
+  kind: 'network';
+  member_label: string;
+  categories: ChartSeries[];
+  window: ChartWindow;
+  nodes: NetworkNode[];
+  edges: { source: string; target: string; shared: number }[];
+}
+
+/** Individual timestamped events (releases) in a trailing window. */
+export interface EventsDocument extends ChartDocumentMeta {
+  kind: 'events';
+  category: { key: string; label: string };
+  label: { key: string; label: string };
+  types: ChartSeries[];
+  /** Row order for the timeline: busiest first. */
+  categories: string[];
+  window: ChartWindow;
+  /** Each has the category key, `time` (ISO UTC), the label key, and `type`. */
+  rows: Row[];
+}
+
+export type SeriesDocument = TimeseriesDocument | CategoriesDocument;
+export type ChartDocument = SeriesDocument | MatrixDocument | NetworkDocument | EventsDocument;
+
+export interface ChartVariant {
+  interactive?: { kind: ChartDocument['kind']; path: string };
+  label: string;
+  /** The variant's PNG, which always exists (v1 lists no variant without one). The
+   *  dashboard keys the variant by it and draws from `interactive` instead. */
   file: string;
-  /** Intrinsic pixel size, when the emitter could read it — lets the browser
-   *  reserve the image's box so loading charts don't shift the page. */
-  width?: number;
-  height?: number;
   /**
    * This tab's own "how to read this" and derivation steps. A chart's tabs show
    * different populations (maintainers / committers) or different spans, so the
@@ -210,6 +357,8 @@ export interface Manifest {
   macro_order?: string[];
   /** Why a tab may be empty for an org — shown in place of a blank tab. */
   macro_absent_notes?: Record<string, string>;
+  /** Each tab's one-line purpose, shown under its title. */
+  macro_summaries?: Record<string, string>;
   /** Macro name -> ordered section-group names; each tab renders as this sequence. */
   group_order?: Record<string, string[]>;
   /** Display labels for rolling periods ("30d" -> "30 days"). */
@@ -267,10 +416,9 @@ export interface SectionDoc {
   variants?: SectionVariant[];
 }
 
-/** Deploy-relative roots: the app, the API, and the chart PNGs ship together. */
+/** Deploy-relative roots: the app and the API ship together. */
 const BASE = import.meta.env.BASE_URL;
 export const API_ROOT = `${BASE}data/api/v1`;
-export const chartUrl = (file: string): string => `${BASE}${file}`;
 
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);

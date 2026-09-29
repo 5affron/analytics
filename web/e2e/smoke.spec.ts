@@ -6,7 +6,8 @@ test('the built app boots offline under a subpath and each macro renders', async
   browserErrors,
 }) => {
   await page.goto('./');
-  await expect(page.getByRole('heading', { name: 'Hiero — analytics dashboard' })).toBeVisible();
+  await expect(page).toHaveTitle('Hiero — analytics dashboard');
+  const pages = page.getByRole('navigation', { name: 'Dashboard' });
   const macros = new Set(
     Object.values(MANIFEST.orgs).flatMap((entry) => [
       ...entry.sections.map((section) => section.macro),
@@ -15,15 +16,22 @@ test('the built app boots offline under a subpath and each macro renders', async
     ]),
   );
   for (const macro of macros) {
-    await page.getByRole('button', { name: macro, exact: true }).click();
+    await pages.getByRole('button', { name: macro, exact: true }).click();
+    await expect(page.getByRole('heading', { level: 1, name: macro, exact: true })).toBeVisible();
     await expect(page.getByRole('table').first()).toBeVisible();
     await expect(page.getByRole('table').first().locator('tbody tr').first()).toBeVisible();
   }
-  await page.getByRole('button', { name: 'Governance', exact: true }).click();
-  const chart = page.getByRole('img', { name: 'Unique active contributors by role' });
-  await chart.click();
-  await expect(page.getByRole('dialog')).toBeVisible();
+  await pages.getByRole('button', { name: 'Governance', exact: true }).click();
+  // Charts draw from their JSON documents with Recharts, not from the PNGs.
+  const figure = page.getByRole('figure', { name: 'Unique active contributors by role — By year' });
+  await expect(figure.locator('svg.recharts-surface').first()).toBeVisible();
+  await figure
+    .getByRole('button', { name: 'Expand interactive chart: Unique active contributors by role' })
+    .click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('svg.recharts-surface').first()).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(dialog).toHaveCount(0);
   expect(browserErrors).toEqual([]);
 });

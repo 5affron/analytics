@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChartSection } from '../api';
+import type { ChartSection, ChartVariant } from '../api';
 import { ChartSectionCard } from '../components/ChartSectionCard';
 import { CoverageMatrix } from '../components/CoverageMatrix';
+import InteractiveChart from '../components/InteractiveChart';
 import { MetricTiles } from '../components/MetricTiles';
 import { PeriodTabs } from '../components/PeriodTabs';
 import { StatusBoard } from '../components/StatusBoard';
@@ -45,69 +46,60 @@ const slideshow: ChartSection = {
 };
 
 describe('Chart printing', () => {
-  it('prints every slide with its selected variant and restores the screen state', async () => {
-    const card = <ChartSectionCard section={slideshow} provenance={MANIFEST.provenance} />;
-    const { rerender } = render(card);
-    await userEvent.click(screen.getByRole('button', { name: 'Active' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Next ›' }));
-    await userEvent.click(screen.getByRole('button', { name: 'By month' }));
+  const radio = (name: string) => screen.getByRole('radio', { name });
 
-    expect(screen.queryByRole('img', { name: 'Contributors' })).not.toBeInTheDocument();
-    // Hidden slides still fetch their active source before a native print.
-    expect(screen.getByAltText('Contributors')).toHaveAttribute('loading', 'eager');
+  it('prints every slide with its selected variant and restores the screen state', async () => {
+    const card = () => <ChartSectionCard section={slideshow} provenance={MANIFEST.provenance} />;
+    const { rerender } = render(card());
+    await userEvent.click(radio('Active'));
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await userEvent.click(radio('By month'));
+    // Off-screen slides stay mounted (keeping their choice) but out of view.
+    expect(screen.queryByRole('figure', { name: /^Contributors/ })).not.toBeInTheDocument();
 
     printState.printing = true;
-    rerender(<ChartSectionCard section={slideshow} provenance={MANIFEST.provenance} />);
-
-    expect(screen.getByRole('img', { name: 'Contributors' })).toHaveAttribute(
-      'src',
-      expect.stringContaining('active.png'),
-    );
-    expect(screen.getByRole('img', { name: 'Pipeline' })).toHaveAttribute(
-      'src',
-      expect.stringContaining('month.png'),
-    );
-    expect(screen.getByText('Contributors — Active')).toBeInTheDocument();
-    expect(screen.getByText('Pipeline — By month')).toBeInTheDocument();
+    rerender(card());
+    expect(screen.getByRole('figure', { name: 'Contributors — Active' })).toBeVisible();
+    expect(screen.getByRole('figure', { name: 'Pipeline — By month' })).toBeVisible();
+    expect(screen.getByText('Contributors view: Active')).toBeInTheDocument();
+    expect(screen.getByText('Pipeline view: By month')).toBeInTheDocument();
 
     printState.printing = false;
-    rerender(<ChartSectionCard section={slideshow} provenance={MANIFEST.provenance} />);
-    expect(screen.queryByRole('img', { name: 'Contributors' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'By month' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    await userEvent.click(screen.getByRole('button', { name: '‹ Prev' }));
-    expect(screen.getByRole('button', { name: 'Active' })).toHaveAttribute('aria-pressed', 'true');
+    rerender(card());
+    expect(screen.queryByRole('figure', { name: /^Contributors/ })).not.toBeInTheDocument();
+    expect(radio('By month')).toBeChecked();
+    await userEvent.click(screen.getByRole('button', { name: 'Prev' }));
+    expect(radio('Active')).toBeChecked();
   });
 
-  it('names a failed chart and resets readiness when its variant changes', async () => {
-    const section = { ...slideshow, charts: [slideshow.charts[0]] };
-    const { rerender } = render(
-      <ChartSectionCard section={section} provenance={MANIFEST.provenance} />,
+  it('marks a loading chart pending and a failed one as an error, naming it for paper', async () => {
+    let fail: () => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((_resolve, reject) => {
+            fail = () => reject(new Error('offline'));
+          }),
+      ),
     );
-    fireEvent.error(screen.getByAltText('Contributors'));
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Could not load chart: Contributors (All).',
+    const variant: ChartVariant = {
+      label: 'All',
+      file: 'all.png',
+      interactive: { kind: 'timeseries', path: 'test/all.json' },
+    };
+    render(
+      <InteractiveChart variant={variant} title="Contributors" provenance={MANIFEST.provenance} />,
     );
-    expect(screen.getByAltText('Contributors').closest('figure')).toHaveAttribute(
-      'data-print-error',
-    );
+    expect(screen.getByRole('status')).toHaveAttribute('data-print-pending');
+    expect(screen.getByRole('status')).toHaveTextContent('Contributors (All)');
 
-    await userEvent.click(screen.getByRole('button', { name: 'Active' }));
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.getByAltText('Contributors').closest('figure')).toHaveAttribute(
-      'data-print-pending',
-    );
-
-    printState.printing = true;
-    rerender(<ChartSectionCard section={section} provenance={MANIFEST.provenance} />);
-    expect(screen.getByText(/Chart still loading: Contributors \(Active\)/)).toBeInTheDocument();
-    fireEvent.load(screen.getByAltText('Contributors'));
-    expect(screen.queryByText(/Chart still loading/)).not.toBeInTheDocument();
-    expect(screen.getByAltText('Contributors').closest('figure')).not.toHaveAttribute(
-      'data-print-pending',
-    );
+    await act(async () => fail());
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveAttribute('data-print-error');
+    expect(alert).toHaveTextContent('Could not load chart data: Contributors (All).');
+    expect(document.querySelector('[data-print-pending]')).toBeNull();
+    vi.unstubAllGlobals();
   });
 });
 
@@ -119,7 +111,7 @@ describe('Structured dashboard content in print', () => {
       screen.getByPlaceholderText('Filter by HIP number or title…'),
       'Throughput',
     );
-    await userEvent.click(screen.getByRole('button', { name: 'Approved' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Approved' }));
     const screenTable = screen.getByRole('table');
 
     printState.printing = true;
@@ -157,7 +149,7 @@ describe('Structured dashboard content in print', () => {
 
     printState.printing = false;
     rerender(<StatusBoard view={BOARD_DOC} onJump={onJump} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Show in coverage matrix ↓' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Show in coverage matrix' }));
     expect(onJump).toHaveBeenCalledWith(1200);
   });
 
@@ -186,8 +178,13 @@ describe('Structured dashboard content in print', () => {
     render(
       <MetricTiles tiles={[{ label: 'Maintainers', value: '103', note: 'Counted by role.' }]} />,
     );
-    expect(screen.getByText('Maintainers', { selector: 'div.metric-tile > div' })).toBeVisible();
-    expect(screen.getByText('103', { selector: 'div.metric-tile > div' })).toBeVisible();
+    // The button stays mounted (hidden) for focus; paper reads the plain tile.
+    const printed = screen.getAllByText('103').filter((node) => !node.closest('button'));
+    expect(printed).toHaveLength(1);
+    const tile = printed[0].closest('div.rounded-xl')!;
+    expect(tile).toBeVisible();
+    expect(tile.tagName).toBe('DIV');
+    expect(within(tile as HTMLElement).getByText('Maintainers')).toBeVisible();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
@@ -219,8 +216,12 @@ describe('Structured dashboard content in print', () => {
       </>
     );
     const { rerender } = render(content());
-    const names = ['1 month', 'Active', 'Maintainers 103'];
-    const controls = names.map((name) => screen.getByRole('button', { name }));
+    const find = [
+      () => screen.getByRole('radio', { name: '1 month' }),
+      () => screen.getByRole('radio', { name: 'Active' }),
+      () => screen.getByRole('button', { name: /^Maintainers/ }),
+    ];
+    const controls = find.map((get) => get());
     printState.printing = true;
     rerender(content());
     for (const control of controls) {
@@ -229,8 +230,6 @@ describe('Structured dashboard content in print', () => {
     }
     printState.printing = false;
     rerender(content());
-    names.forEach((name, index) =>
-      expect(screen.getByRole('button', { name })).toBe(controls[index]),
-    );
+    find.forEach((get, index) => expect(get()).toBe(controls[index]));
   });
 });

@@ -383,7 +383,9 @@ def outputs_root(tmp_path_factory) -> Path:
         mp.setattr(
             scorecard_mod,
             "fetch_repo_scorecard",
-            lambda name: ScorecardRecord(repo=name, score=7.5, checks={"Maintained": 10, "Code-Review": 8}, date=_NOW),
+            lambda name, **_kwargs: ScorecardRecord(
+                repo=name, score=7.5, checks={"Maintained": 10, "Code-Review": 8}, date=_NOW
+            ),
         )
         mp.setattr(
             codeowner_mod,
@@ -526,6 +528,39 @@ def test_data_api_ships_every_declared_chart_csv(outputs_root: Path):
     assert any("download" in section for section in hip_charts)
 
 
+def test_data_api_ships_every_interactive_chart(outputs_root: Path):
+    """Every interactive reference resolves, and every source whose CSV was produced publishes."""
+    api_dir = outputs_root / "data" / "api" / "v1"
+    manifest = json.loads((api_dir / "manifest.json").read_text())
+
+    published, missing = set(), []
+    for entry in manifest["orgs"].values():
+        for section in entry["chart_sections"]:
+            for chart in section["charts"]:
+                for variant in chart["variants"]:
+                    if reference := variant.get("interactive"):
+                        path = api_dir / reference["path"]
+                        if not path.exists():
+                            missing.append(reference["path"])
+                            continue
+                        document = json.loads(path.read_text())
+                        assert document["kind"] == reference["kind"]
+                        content = {"network": "nodes"}.get(document["kind"], "rows")
+                        assert document["population"] and content in document
+                        published.add(Path(reference["path"]).name)
+    assert not missing, f"interactive charts referenced but not written: {missing}"
+
+    org_data = outputs_root / "data" / "org" / PRIMARY
+    expected = {
+        f"{Path(filename).stem}.json"
+        for macro in CHART_MACROS
+        for spec in macro["charts"].get(PRIMARY) or macro["charts"].get("*", [])
+        for filename, source in spec.get("interactive_sources", {}).items()
+        if (org_data / source["file"]).exists()
+    }
+    assert expected <= published, f"sources with data but no interactive chart: {sorted(expected - published)}"
+
+
 def test_every_spec_table_csv_is_produced(outputs_root: Path):
     """Each section's CSV (and every derived period variant) exists for the primary org."""
     org_data = outputs_root / "data" / "org" / PRIMARY
@@ -559,6 +594,16 @@ def test_no_orphan_org_level_outputs(outputs_root: Path):
         if spec.get("periods"):
             stem = Path(spec["file"]).stem
             spec_csvs.update(period.filename(stem) for period in ACTIVITY_PERIODS)
+    # CSVs an interactive chart reads are spec-listed through its source.
+    spec_csvs.update(
+        name
+        for macro in CHART_MACROS
+        for specs in macro["charts"].values()
+        for spec in specs
+        for source in spec.get("interactive_sources", {}).values()
+        for name in (source["file"], source.get("edges_file"))
+        if name
+    )
     period_suffixes = tuple(f"_{period.key}.csv" for period in ACTIVITY_PERIODS)
 
     orphans = []
@@ -601,3 +646,30 @@ def test_every_emitted_kpi_tile_explains_itself(outputs_root: Path):
         if not tile.get("note") or not tile.get("methodology")
     ]
     assert not unexplained, f"KPI tiles with no explanation: {unexplained}"
+
+
+def test_every_chart_variant_has_a_data_source():
+    """Every chart variant a spec lists declares an interactive source."""
+    for macro in CHART_MACROS:
+        for specs in macro["charts"].values():
+            for spec in specs:
+                for _caption, variants in spec["files"]:
+                    for _label, filename in variants:
+                        assert filename in spec.get("interactive_sources", {}), filename
+
+
+def test_every_produced_chart_has_interactive_data(outputs_root: Path):
+    """Every published chart variant has its PNG and an interactive document on disk.
+
+    The PNG half is the v1 additive-only guarantee: ``file`` has always named an
+    image that exists, so a consumer built before interactive charts still works.
+    """
+    manifest = json.loads((outputs_root / "data/api/v1/manifest.json").read_text())
+    for org in manifest["orgs"].values():
+        for section in org["chart_sections"]:
+            for chart in section["charts"]:
+                for variant in chart["variants"]:
+                    assert (outputs_root / variant["file"]).is_file(), variant["file"]
+                    assert variant.get("interactive"), variant["file"]
+                    target = outputs_root / "data/api/v1" / variant["interactive"]["path"]
+                    assert target.exists()

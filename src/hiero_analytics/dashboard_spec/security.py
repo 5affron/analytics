@@ -5,6 +5,11 @@ Pure data; see the package __init__ for assembly.
 
 from __future__ import annotations
 
+from hiero_analytics.dashboard_spec.interactive import OWNERSHIP_SOURCES, SCORECARD_CHECKS
+
+# One line under the tab's title saying what the tab is for.
+SUMMARY = "Explore repository health, security practices, and scorecard results."
+
 # Shown when the selected org has no content for this tab.
 ABSENT_NOTE = (
     "Nothing generated for this org yet: the scorecard and repo-compliance "
@@ -26,9 +31,37 @@ CHART_MACRO = {
                     ("Org scorecard", "org_scorecard.png"),
                     ("Score breakdown", "org_scorecard_breakdown.png"),
                 ],
+                # The breakdown is a checks matrix, not stacked bars: stacking
+                # per-check scores implies they add up to the aggregate, which
+                # Scorecard weights instead.
+                "interactive_sources": {
+                    "org_scorecard_breakdown.png": SCORECARD_CHECKS,
+                    "org_scorecard.png": {
+                        "kind": "categories",
+                        "file": "org_scorecard.csv",
+                        "category": "repo",
+                        "category_label": "Repository",
+                        "strip_org_prefix": True,
+                        "series": [{"key": "score", "label": "Score", "color": "var(--chart-committer)"}],
+                        "values": "number",
+                        "orientation": "horizontal",
+                        "rank": True,
+                        "top_n": 15,
+                        "reference": {"stat": "median", "label": "Org median"},
+                        "value_max": 10,
+                        "window": "snapshot",
+                        "metric": "openssf_scorecard",
+                        "unit": "OpenSSF Scorecard score (0–10)",
+                        "population": (
+                            "Each repository's aggregate OpenSSF Scorecard score, as published by the "
+                            "Scorecard API. Repositories without a published scorecard are absent."
+                        ),
+                    },
+                },
             },
             {
                 "id": "ownership",
+                "interactive_sources": OWNERSHIP_SOURCES,
                 "group": "Ownership",
                 "title": "Code owners & CI runners",
                 "description": (

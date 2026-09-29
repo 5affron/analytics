@@ -22,7 +22,7 @@ describe('Print lifecycle', () => {
   it('synchronously prepares native printing and restores only previously closed sections', () => {
     render(
       <PrintProvider>
-        <div className="wrap">
+        <div>
           <PrintProbe />
           <details data-testid="closed">
             <summary>Closed</summary>Hidden content
@@ -52,7 +52,7 @@ describe('Print lifecycle', () => {
     expect(document.documentElement).not.toHaveAttribute('data-printing');
   });
 
-  it('bounds font/image preparation and restores the screen after a timeout', async () => {
+  it('bounds font and chart preparation and restores the screen after a timeout', async () => {
     vi.useFakeTimers();
     const print = vi.spyOn(window, 'print').mockImplementation(() => {});
     Object.defineProperty(document, 'fonts', {
@@ -117,12 +117,39 @@ describe('Print lifecycle', () => {
     expect(screen.getByText('Screen content')).toBeInTheDocument();
     expect(print).not.toHaveBeenCalled();
   });
-  it('refuses to print when a decoded chart changes source during preparation', async () => {
-    let releaseFonts: () => void = () => {};
-    const fonts = new Promise<void>((resolve) => {
-      releaseFonts = resolve;
+  it('waits for a loading chart and prints once its data has arrived', async () => {
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
     });
-    Object.defineProperty(document, 'fonts', { configurable: true, value: { ready: fonts } });
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {});
+    function Chart({ loaded }: { loaded: boolean }) {
+      return loaded ? <p>Chart drawn</p> : <p data-print-pending>Loading chart</p>;
+    }
+    const { rerender } = render(
+      <PrintProvider>
+        <Chart loaded={false} />
+        <PrintControls />
+      </PrintProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Print tab' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // A chart still loading must never print as a blank gap.
+    expect(print).not.toHaveBeenCalled();
+
+    rerender(
+      <PrintProvider>
+        <Chart loaded />
+        <PrintControls />
+      </PrintProvider>,
+    );
+    await vi.waitFor(() => expect(print).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('refuses to print when a chart failed to load', async () => {
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       callback(0);
       return 1;
@@ -130,28 +157,12 @@ describe('Print lifecycle', () => {
     const print = vi.spyOn(window, 'print').mockImplementation(() => {});
     render(
       <PrintProvider>
-        <img data-print-chart src="old.png" alt="Chart being prepared" />
+        <p data-print-error>Could not load chart data</p>
         <PrintControls />
       </PrintProvider>,
     );
-    const image = screen.getByRole('img') as HTMLImageElement;
-    let width = 1;
-    image.decode = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(image, 'naturalWidth', { get: () => width });
-    Object.defineProperty(image, 'complete', { get: () => width > 0 });
     fireEvent.click(screen.getByRole('button', { name: 'Print tab' }));
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    // The earlier decode has finished, but the current source has not. A
-    // stale readiness promise must never turn a missing chart into a PDF.
-    width = 0;
-    image.src = 'new-still-loading.png';
-    await act(async () => {
-      releaseFonts();
-      await Promise.resolve();
-    });
+    await screen.findByRole('alert');
     expect(print).not.toHaveBeenCalled();
     expect(screen.getByRole('alert')).toHaveTextContent('Could not prepare every chart');
     expect(screen.getByRole('button', { name: 'Print tab' })).toBeEnabled();

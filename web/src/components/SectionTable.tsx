@@ -10,7 +10,10 @@
  */
 
 import { useEffect, useState } from 'react';
+import { CrosshairIcon, ExternalLinkIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import type { Manifest, SectionDoc, SectionVariant } from '../api';
+import { DIMENSION_LABELS, dimensionOf, matches, useFocus } from '../focus';
 import { safeUrl } from '../safety';
 import { useDataTable } from '../useDataTable';
 import { useHashState } from '../useHashState';
@@ -55,8 +58,18 @@ export function SectionTable({
   // The tabs carry independent row sets, so a period the previous tab offered
   // may not exist on this one; fall back to its all-time rows rather than
   // rendering an undefined table.
+  // The period actually shown, so the tabs (and a printed "Time range") never
+  // name a window this tab lacks.
   const effectivePeriod = period && active.periods?.[period] ? period : null;
-  const rows = (effectivePeriod && active.periods?.[effectivePeriod]) || active.rows;
+  const periodRows = (effectivePeriod && active.periods?.[effectivePeriod]) || active.rows;
+  // The dashboard focus narrows this table only when it has that dimension's column.
+  const [focus, setFocus] = useFocus();
+  const focusColumn = focus
+    ? active.columns.find((column) => dimensionOf(column.key) === focus.dimension)
+    : undefined;
+  const rows = focusColumn
+    ? periodRows.filter((row) => matches(focus, focus!.dimension, row[focusColumn.key]))
+    : periodRows;
   const table = useDataTable(active.columns, rows, active.id);
   const shown = table.getRowModel().rows.length;
   const action = active.action ? safeUrl(active.action.url) : null;
@@ -65,33 +78,17 @@ export function SectionTable({
     <SectionCard
       id={doc.id}
       title={doc.title}
-      badge={shown === rows.length ? `${rows.length} rows` : `${shown} of ${rows.length}`}
+      badge={
+        shown === periodRows.length
+          ? `${periodRows.length} rows`
+          : `${shown} of ${periodRows.length}`
+      }
       description={active.description}
       generatedAt={active.generated_at}
       stale={active.stale}
-      actions={
-        <>
-          {/* The link names the active tab, so what a reader shares is what
-              they are looking at. */}
-          <CopyLinkButton sectionId={active.id} />
-          {action && (
-            <a className="dl" href={action} target="_blank" rel="noopener noreferrer">
-              {active.action?.label}
-            </a>
-          )}
-          <CsvDownloadButton
-            provenance={provenance}
-            payload={() => ({
-              name: active.id,
-              title: active.title,
-              columns: active.columns,
-              rows: table.getRowModel().rows.map((row) => row.original),
-              total: rows.length,
-              dataAsOf: active.generated_at,
-            })}
-          />
-        </>
-      }
+      // The link names the active tab, so what a reader shares is what they
+      // are looking at.
+      headerActions={<CopyLinkButton sectionId={active.id} quiet />}
     >
       <VariantTabs
         labels={variants.map((variant) => variant.label)}
@@ -99,13 +96,62 @@ export function SectionTable({
         onSelect={setIndex}
         ariaLabel="Role"
       />
-      <PeriodTabs
-        periods={Object.keys(active.periods ?? {})}
-        active={effectivePeriod}
-        onChange={setPeriod}
-        labels={periodLabels}
+      {focus && focusColumn && (
+        <p
+          role="status"
+          className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-link/40 bg-link/5 px-3 py-2 text-xs"
+        >
+          <CrosshairIcon className="size-3.5 text-link" aria-hidden="true" />
+          {/* One text run: the flex gap would otherwise split "name: n of m". */}
+          <span>
+            Filtered to {DIMENSION_LABELS[focus.dimension]} <strong>{focus.value}</strong>:{' '}
+            {rows.length} of {periodRows.length} rows.
+          </span>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0 text-xs"
+            onClick={() => setFocus(null)}
+          >
+            Clear focus
+          </Button>
+        </p>
+      )}
+      <DataTable
+        table={table}
+        controls={
+          <PeriodTabs
+            periods={Object.keys(active.periods ?? {})}
+            active={effectivePeriod}
+            onChange={setPeriod}
+            labels={periodLabels}
+          />
+        }
+        actions={
+          <>
+            {action && (
+              <Button asChild variant="outline" size="sm">
+                <a href={action} target="_blank" rel="noopener noreferrer">
+                  <ExternalLinkIcon data-icon="inline-start" />
+                  {active.action?.label}
+                </a>
+              </Button>
+            )}
+            <CsvDownloadButton
+              provenance={provenance}
+              payload={() => ({
+                name: active.id,
+                title: active.title,
+                columns: active.columns,
+                rows: table.getRowModel().rows.map((row) => row.original),
+                // "N of M" in the preamble: the focus and the search both narrow the export.
+                total: periodRows.length,
+                dataAsOf: active.generated_at,
+              })}
+            />
+          </>
+        }
       />
-      <DataTable table={table} />
     </SectionCard>
   );
 }

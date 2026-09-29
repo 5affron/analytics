@@ -9,6 +9,9 @@ import {
   type ReactNode,
 } from 'react';
 import { flushSync } from 'react-dom';
+import { CircleAlertIcon, PrinterIcon } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { PrintContext } from './printContext';
 
 const PREPARE_TIMEOUT_MS = 15_000;
@@ -28,12 +31,10 @@ export function PrintProvider({ children }: { children: ReactNode }) {
     if (focusFrame.current !== undefined) cancelAnimationFrame(focusFrame.current);
     focus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Persistent scroll containers opt in at their component with data-scroll-restore.
-    scroll.current = [...document.querySelectorAll<HTMLElement>('.wrap [data-scroll-restore]')].map(
+    scroll.current = [...document.querySelectorAll<HTMLElement>('[data-scroll-restore]')].map(
       (element) => ({ element, top: element.scrollTop, left: element.scrollLeft }),
     );
-    closed.current = [
-      ...document.querySelectorAll<HTMLDetailsElement>('.wrap details:not([open])'),
-    ];
+    closed.current = [...document.querySelectorAll<HTMLDetailsElement>('details:not([open])')];
     document.documentElement.dataset.printing = 'true';
     // beforeprint is synchronous: React must mount the non-virtualised rows
     // before the browser snapshots layout, not in a later effect/frame.
@@ -81,9 +82,7 @@ export function PrintProvider({ children }: { children: ReactNode }) {
     // a new print view or browser automation). No change event follows it.
     if (active.current) {
       document.documentElement.dataset.printing = 'true';
-      closed.current = [
-        ...document.querySelectorAll<HTMLDetailsElement>('.wrap details:not([open])'),
-      ];
+      closed.current = [...document.querySelectorAll<HTMLDetailsElement>('details:not([open])')];
       closed.current.forEach((details) => {
         details.open = true;
       });
@@ -109,44 +108,36 @@ export function PrintProvider({ children }: { children: ReactNode }) {
   );
 }
 
-/** Bounded readiness: a broken image must never become a silent blank chart. */
+/** Bounded readiness: a chart still loading or failed must never print as a silent gap. */
 async function waitForPrintAssets(signal: AbortSignal) {
-  const images = [...document.querySelectorAll<HTMLImageElement>('img[data-print-chart]')];
-  // Use the requested source: currentSrc can still name the previous variant
-  // while the newly selected image is loading.
-  const sources = images.map((img) => img.src);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let frame: number | undefined;
+  let observer: MutationObserver | undefined;
   let onAbort: (() => void) | undefined;
-  let finished = false;
+  // Every chart renders from its JSON document; while one loads it carries
+  // data-print-pending, and a failed one carries data-print-error.
+  const settled = () => !document.querySelector('[data-print-pending]');
   const prepare = async () => {
-    await Promise.all([
-      document.fonts?.ready,
-      ...images.map(async (img) => {
-        await img.decode();
-        if (!img.naturalWidth) throw new Error('Missing chart');
-      }),
-    ]);
-    if (finished) return;
+    await document.fonts?.ready;
+    if (!settled()) {
+      await new Promise<void>((resolve) => {
+        observer = new MutationObserver(() => settled() && resolve());
+        observer.observe(document.body, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          attributeFilter: ['data-print-pending'],
+        });
+      });
+    }
     signal.throwIfAborted();
-    // Let image load handlers commit their captions/status before printing.
-    // Keep this frame inside the timeout too: background tabs may suspend it.
+    // Let the charts that just arrived lay out before the snapshot. Keep this
+    // frame inside the timeout too: background tabs may suspend it.
     await new Promise<void>((resolve) => {
       frame = requestAnimationFrame(() => resolve());
     });
     signal.throwIfAborted();
-    const current = [...document.querySelectorAll<HTMLImageElement>('img[data-print-chart]')];
-    if (
-      current.length !== images.length ||
-      current.some(
-        (img, i) =>
-          img !== images[i] ||
-          (img.currentSrc || img.src) !== sources[i] ||
-          !img.complete ||
-          !img.naturalWidth,
-      ) ||
-      document.querySelector('[data-print-error], [data-print-pending]')
-    ) {
+    if (!settled() || document.querySelector('[data-print-error]')) {
       throw new Error('Charts changed or could not finish loading');
     }
   };
@@ -166,7 +157,7 @@ async function waitForPrintAssets(signal: AbortSignal) {
       }),
     ]);
   } finally {
-    finished = true;
+    observer?.disconnect();
     if (timer !== undefined) clearTimeout(timer);
     if (frame !== undefined) cancelAnimationFrame(frame);
     if (onAbort) signal.removeEventListener('abort', onAbort);
@@ -213,19 +204,28 @@ export function PrintControls({ ready = true }: { ready?: boolean }) {
     }
   };
   return (
-    <div data-print-hide className="my-4">
-      <button type="button" className="dl" disabled={!ready || busy} onClick={() => void print()}>
-        {busy ? 'Preparing print…' : 'Print tab'}
-      </button>
+    <div data-print-hide className="mb-4 flex flex-wrap items-center justify-end gap-3">
       {busy && (
-        <span role="status" className="ml-3 text-[13px] text-muted">
+        <span role="status" className="text-xs text-muted-foreground">
           Loading charts for printing…
         </span>
       )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={!ready || busy}
+        onClick={() => void print()}
+      >
+        <PrinterIcon data-icon="inline-start" />
+        {busy ? 'Preparing print…' : 'Print tab'}
+      </Button>
       {error && (
-        <p role="alert" className="error">
-          Could not prepare every chart for printing. Check your connection, reload and try again.
-        </p>
+        <Alert variant="destructive" className="basis-full">
+          <CircleAlertIcon />
+          <AlertTitle>Could not prepare every chart for printing.</AlertTitle>
+          <AlertDescription>Check your connection, reload and try again.</AlertDescription>
+        </Alert>
       )}
     </div>
   );

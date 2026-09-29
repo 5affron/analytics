@@ -1,32 +1,58 @@
 /**
- * The analytics dashboard, driven entirely by the data-API manifest: metric
- * tiles, the "how to read this" glossary, a jump bar over collapsible section
- * groups, chart-section cards, then the table sections.
+ * The analytics dashboard, driven entirely by the data-API manifest: a sticky
+ * header, a sidebar of tabs, and the active tab's tiles, glossary and section groups.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { CircleAlertIcon, RotateCwIcon } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { fetchManifest, type ChartSection, type Manifest } from './api';
+import { AppHeader, FreshnessStatus } from './components/AppHeader';
+import { OrgAvatar } from './components/OrgSwitcher';
+import { OrgContext } from './orgContext';
+import { PAGE_TITLE_ID } from './hooks/use-header-scroll';
+import { NARROW_HEADER, useMediaQuery } from './hooks/use-media-query';
+import { AppSidebar } from './components/AppSidebar';
 import { ChartSectionCard } from './components/ChartSectionCard';
+import { SectionBoundary } from './components/ErrorBoundary';
 import { Glossary } from './components/Glossary';
 import { MetricTiles } from './components/MetricTiles';
 import { ProvenanceFooter } from './components/ProvenanceFooter';
-import { SectionGroups, type Group } from './components/SectionGroups';
+import { SectionGroups } from './components/SectionGroups';
 import { SectionTable } from './components/SectionTable';
 import { Skeleton } from './components/Skeleton';
-import { TabBar } from './components/TabBar';
 import { WipFooter } from './components/WipFooter';
-import { stamp } from './format';
+import { navModel, type NavModel } from './nav';
+import { tocEntries, type Group, type TocEntry } from './toc';
 import { useHashState } from './useHashState';
+import { writeParams } from './urlState';
+import { FocusBar } from './components/FocusBar';
 import { useSectionDocs } from './useSectionDocs';
 import { useViewDocs } from './useViewDocs';
 import { ViewCards } from './components/ViewCards';
-import { PrintControls, PrintProvider } from './printing';
 import { PrintLayout } from './components/PrintFooter';
+import { PrintControls, PrintProvider } from './printing';
+import { stamp } from './format';
 import './print.css';
 
 const FLASH_MS = 1800; // shared link jump: flash the target for this long, then remove the highlight
 
-function OrgPanel({ org, manifest, macro }: { org: string; manifest: Manifest; macro: string }) {
+function OrgPanel({
+  org,
+  manifest,
+  macro,
+  onToc,
+}: {
+  org: string;
+  manifest: Manifest;
+  macro: string;
+  /** Reports this tab's table of contents to the sidebar. */
+  onToc: (entries: TocEntry[]) => void;
+}) {
   const entry = manifest.orgs[org];
   // An absorbed section is a role variant another card renders as a tab. Its
   // document still exists (v1 may not withdraw an id), but its rows travel
@@ -117,23 +143,36 @@ function OrgPanel({ org, manifest, macro }: { org: string; manifest: Manifest; m
                 <ViewCards views={groupViews} sectionDocs={docs} provenance={provenance} />
               )}
               {groupCharts.map((section) => (
-                <ChartSectionCard key={section.id} section={section} provenance={provenance} />
+                <SectionBoundary key={section.id} id={section.id} title={section.title}>
+                  <ChartSectionCard section={section} provenance={provenance} />
+                </SectionBoundary>
               ))}
               {groupDocs.map((doc) => (
-                <SectionTable
-                  key={doc.id}
-                  doc={doc}
-                  provenance={provenance}
-                  periodLabels={manifest.period_labels}
-                />
+                <SectionBoundary key={doc.id} id={doc.id} title={doc.title}>
+                  <SectionTable
+                    doc={doc}
+                    provenance={provenance}
+                    periodLabels={manifest.period_labels}
+                  />
+                </SectionBoundary>
               ))}
             </>,
           ],
         ];
       });
 
+  // Keyed by content so a re-render with the same groups doesn't re-report them.
+  const toc = tocEntries(groups);
+  const tocKey = JSON.stringify(toc);
+  useEffect(() => {
+    onToc(toc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tocKey is toc's identity
+  }, [tocKey, onToc]);
+  useEffect(() => () => onToc([]), [onToc]);
+
   return (
     <>
+      {/* Keyed by tab and org: navigating away cancels a pending preparation. */}
       <PrintControls key={`${org}/${macro}`} ready={settled} />
       {!settled && (
         <p data-print-only>
@@ -145,10 +184,16 @@ function OrgPanel({ org, manifest, macro }: { org: string; manifest: Manifest; m
       {/* A section that could not load leaves a named gap rather than blanking
           the tab — the rest of the page is still worth reading. */}
       {unavailable.length > 0 && (
-        <p className="error" data-print-incomplete>
-          Could not load {unavailable.length === 1 ? 'this section' : 'these sections'}:{' '}
-          {unavailable.join(', ')}. Everything else on this tab is unaffected — reload to try again.
-        </p>
+        <Alert variant="destructive" className="mb-6" data-print-incomplete>
+          <CircleAlertIcon />
+          <AlertTitle>
+            Could not load {unavailable.length === 1 ? 'this section' : 'these sections'}:{' '}
+            {unavailable.join(', ')}.
+          </AlertTitle>
+          <AlertDescription>
+            Everything else on this tab is unaffected — reload to try again.
+          </AlertDescription>
+        </Alert>
       )}
       {settled ? <SectionGroups groups={groups} /> : <Skeleton label="Loading tab" rows={6} />}
     </>
@@ -158,70 +203,44 @@ function OrgPanel({ org, manifest, macro }: { org: string; manifest: Manifest; m
 /** Human-readable fatal error: retry button up front, raw cause tucked away. */
 function FatalError({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <div className="my-6">
-      <p className="error">
-        Failed to load the dashboard data. This is usually temporary — try again in a moment.
-      </p>
-      <button type="button" className="dl mt-2" onClick={onRetry}>
-        Retry
-      </button>
-      <details className="mt-3 text-[13px] text-muted">
-        <summary className="cursor-pointer">Error details</summary>
-        <pre className="mt-2 whitespace-pre-wrap break-all">{message}</pre>
-      </details>
-    </div>
+    <Alert variant="destructive" className="my-6">
+      <CircleAlertIcon />
+      <AlertTitle>Failed to load the dashboard data.</AlertTitle>
+      <AlertDescription className="flex flex-col items-start gap-3">
+        <p>This is usually temporary — try again in a moment.</p>
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          <RotateCwIcon data-icon="inline-start" />
+          Retry
+        </Button>
+        <Collapsible>
+          <CollapsibleTrigger asChild>
+            <Button variant="link" size="sm" className="px-0">
+              Error details
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <pre className="mt-1 font-mono break-all whitespace-pre-wrap">{message}</pre>
+          </CollapsibleContent>
+        </Collapsible>
+      </AlertDescription>
+    </Alert>
   );
 }
 
-/** Everything that depends on a loaded manifest — tabs, org filter, panels, footer. */
+/** The active tab, for the org selected in the header. */
 function Dashboard({
   manifest,
-  macro,
-  setMacro,
-  org,
-  setOrg,
+  nav,
+  onToc,
 }: {
   manifest: Manifest;
-  macro: string;
-  setMacro: (value: string) => void;
-  org: string;
-  setOrg: (value: string) => void;
+  nav: NavModel;
+  onToc: (entries: TocEntry[]) => void;
 }) {
-  const orgs = Object.keys(manifest.orgs);
-  const derived = [
-    ...new Set(
-      Object.values(manifest.orgs).flatMap((entry) => [
-        ...(entry.sections ?? []).map((section) => section.macro),
-        ...(entry.chart_sections ?? []).map((section) => section.macro),
-        ...(entry.views ?? []).map((view) => view.macro),
-      ]),
-    ),
-  ];
-  // The manifest's family order wins where it knows the macro; anything it
-  // doesn't list (older manifest, ad-hoc macro) keeps its derived position.
-  const declared = (manifest.macro_order ?? []).filter((name) => derived.includes(name));
-  const macros = [...declared, ...derived.filter((name) => !declared.includes(name))];
-  const activeMacro = macros.includes(macro) ? macro : macros[0];
-  // Umbrella tabs: a macro with a parent renders as a sub-tab of that parent.
-  // The top bar shows one entry per umbrella (in content order); a second tab
-  // row appears for the active umbrella's members. The hash keeps storing the
-  // actual macro, so old links keep working.
-  const parents = manifest.macro_parents ?? {};
-  const topOf = (name: string) => parents[name] ?? name;
-  const topTabs = [...new Set(macros.map(topOf))];
-  const activeTop = topOf(activeMacro);
-  const subTabs = macros.filter((name) => parents[name] === activeTop);
-  // The org filter is global: it lists every org and the selection sticks as
-  // tabs change. A tab the selected org has no content for renders a short
-  // explanation (from the manifest) instead of a blank page, so absence reads
-  // as a property of the data rather than a bug.
-  const shownOrg = orgs.includes(org) ? org : orgs[0];
-  const shownEntry = manifest.orgs[shownOrg];
-  const orgHasMacro =
-    (shownEntry.sections ?? []).some((section) => section.macro === activeMacro) ||
-    (shownEntry.chart_sections ?? []).some((section) => section.macro === activeMacro) ||
-    (shownEntry.views ?? []).some((view) => view.macro === activeMacro);
+  const narrowHeader = useMediaQuery(NARROW_HEADER);
+  const { activeMacro, shownOrg, orgHasMacro } = nav;
   const glossary = orgHasMacro ? manifest.macro_glossaries?.[activeMacro] : undefined;
+  const dataAsOf = manifest.provenance.data_as_of;
 
   return (
     <PrintLayout provenance={manifest.provenance}>
@@ -232,39 +251,57 @@ function Dashboard({
         Generated {stamp(manifest.generated_at)} UTC. Periods and filters are stated beside each
         table or chart.
       </p>
-      <p className="sub">
-        Generated {stamp(manifest.generated_at)} UTC · every table filters and sorts · click a chart
-        to enlarge.
-      </p>
-      {/* The org filter is the outermost scope — everything below it is "this
-          org's view" — so it sits above the content tabs. */}
-      {orgs.length > 1 && <TabBar items={orgs} active={shownOrg} onSelect={setOrg} kind="tab" />}
-      <TabBar
-        items={topTabs}
-        active={activeTop}
-        onSelect={(name) => setMacro(macros.find((candidate) => topOf(candidate) === name) ?? name)}
-        kind="macro"
-      />
-      {subTabs.length > 0 && (
-        <TabBar items={subTabs} active={activeMacro} onSelect={setMacro} kind="tab" />
-      )}
+      <div className="mb-6 border-b pb-6">
+        <p className="mb-2.5 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <OrgAvatar org={shownOrg} className="size-5 rounded" />
+          {shownOrg}
+          {nav.topOf(activeMacro) !== activeMacro && (
+            <>
+              <span aria-hidden="true">/</span>
+              {nav.topOf(activeMacro)}
+            </>
+          )}
+        </p>
+        <h1 id={PAGE_TITLE_ID} className="font-display text-4xl font-bold tracking-tight">
+          {activeMacro}
+        </h1>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          {manifest.macro_summaries?.[activeMacro] ??
+            'Explore activity and insights across the Hiero ecosystem.'}
+        </p>
+        {narrowHeader && dataAsOf && (
+          <div className="mt-3">
+            <FreshnessStatus dataAsOf={dataAsOf} />
+          </div>
+        )}
+      </div>
       {/* Every macro ships its own explainer, listing only what that tab
           shows. It may be absent when a cached bundle meets an older manifest
           — degrade to no glossary, never a crash. */}
       {glossary && <Glossary glossary={glossary} />}
+      <FocusBar />
       {orgHasMacro ? (
-        <OrgPanel org={shownOrg} manifest={manifest} macro={activeMacro} />
+        <OrgContext.Provider value={shownOrg}>
+          <OrgPanel org={shownOrg} manifest={manifest} macro={activeMacro} onToc={onToc} />
+        </OrgContext.Provider>
       ) : (
+        // Sized to read as information rather than an error.
         <>
           <PrintControls />
-          <p className="empty">
-            {manifest.macro_absent_notes?.[activeMacro] ??
-              `No ${activeMacro} data for ${shownOrg}.`}
-          </p>
+          <Empty className="my-12">
+            <EmptyHeader>
+              <EmptyTitle>
+                No {activeMacro} data for {shownOrg}
+              </EmptyTitle>
+              {manifest.macro_absent_notes?.[activeMacro] && (
+                <EmptyDescription>{manifest.macro_absent_notes[activeMacro]}</EmptyDescription>
+              )}
+            </EmptyHeader>
+          </Empty>
         </>
       )}
       {/* One footer bar: WIP notice left, provenance right — same rule, same baseline. */}
-      <div className="footrow">
+      <div className="mt-10 flex flex-wrap items-baseline justify-between gap-4 border-t pt-4">
         {manifest.wip !== false && <WipFooter issuesUrl={manifest.issues_url} />}
         <ProvenanceFooter provenance={manifest.provenance} />
       </div>
@@ -300,33 +337,49 @@ export default function App() {
     setReloadKey((key) => key + 1);
   };
 
+  const nav = manifest ? navModel(manifest, macro, org) : null;
+  const [toc, setToc] = useState<TocEntry[]>([]);
+
   return (
+    // The header renders in every state; only the content beneath it changes shape.
     <PrintProvider>
-      <div className="wrap">
-        <h1>Hiero — analytics dashboard</h1>
-        {/* The header renders in every state below; only the content beneath it
-          changes shape — chrome never pops in after the fact. */}
-        {error ? (
-          <FatalError message={error} onRetry={retry} />
-        ) : !manifest ? (
-          <>
-            <p className="sub">Loading…</p>
-            <p data-print-only>
-              Incomplete document: dashboard data is still loading. Close print preview and wait for
-              the dashboard to finish loading.
-            </p>
-            <Skeleton label="Loading dashboard" rows={5} />
-          </>
-        ) : (
-          <Dashboard
-            manifest={manifest}
-            macro={macro}
-            setMacro={setMacro}
-            org={org}
-            setOrg={setOrg}
-          />
-        )}
-      </div>
+      <SidebarProvider
+        className="flex-col"
+        style={{ '--sidebar-width': '17.5rem' } as React.CSSProperties}
+      >
+        <AppHeader
+          nav={nav}
+          // A focused repository or person belongs to one organisation.
+          onOrg={(next) => {
+            writeParams({ focus: null });
+            setOrg(next);
+          }}
+          toc={nav?.orgHasMacro ? toc : []}
+          onTab={setMacro}
+          dataAsOf={manifest?.provenance.data_as_of}
+        />
+        <div className="flex flex-1">
+          <AppSidebar nav={nav} toc={nav?.orgHasMacro ? toc : []} onTab={setMacro} />
+          {/* min-w-0: otherwise a wide table or nowrap stamp widens the page sideways. */}
+          <SidebarInset className="min-w-0">
+            <div className="mx-auto w-full max-w-[1440px] p-4 min-[600px]:p-6 lg:p-8">
+              {error ? (
+                <FatalError message={error} onRetry={retry} />
+              ) : !manifest || !nav ? (
+                <>
+                  <p data-print-only>
+                    Incomplete document: dashboard data is still loading. Close print preview and
+                    wait for the dashboard to finish loading.
+                  </p>
+                  <Skeleton label="Loading dashboard" rows={5} />
+                </>
+              ) : (
+                <Dashboard manifest={manifest} nav={nav} onToc={setToc} />
+              )}
+            </div>
+          </SidebarInset>
+        </div>
+      </SidebarProvider>
     </PrintProvider>
   );
 }

@@ -149,3 +149,55 @@ after the tab's data has loaded; it excludes the initial dashboard load.
 The timeout is a bounded wait with an explicit retry path, not a guarantee that
 every device or connection finishes within 15 seconds. Safari native printing
 remains unverified, and Firefox page numbering still needs its native print setting.
+
+## Port to the interactive dashboard (27 September 2026)
+
+The shadcn/ui dashboard (#490) replaced the PNG galleries with interactive charts
+drawn from each variant's JSON dataset, so the print feature was carried over
+onto the new components rather than merged line by line. Its behaviour is
+unchanged: the live tree is printed under the same transient print context, with
+selections stated as text, every table row up to the 500-row cap, and provenance
+on every page. What changed is how each piece is implemented:
+
+- **Readiness.** Charts are SVG drawn from JSON, so preparation no longer decodes
+  images. A chart still loading (its module or its dataset) carries
+  `data-print-pending`; a chart whose dataset failed carries `data-print-error`
+  and names itself ("Could not load chart data: <title> (<variant>)"). Print tab
+  waits, within the same 15-second bound, until nothing is pending, then refuses
+  to print if anything failed. Native printing before that point prints the named
+  loading or error notice, never a silent gap.
+- **Collapsed content.** Section groups, cards and the tab explainer are Radix
+  collapsibles, which unmount closed content. Each holds its open state and is
+  forced open while printing; the reader's own collapse returns afterwards. The
+  native `<details>` that remain (chart methodology) are still opened and
+  restored by the print controller. Group names print as headings.
+- **Selections.** Variant, role and period switches are toggle groups. While
+  printing they stay mounted but hidden, and a line such as "Time range: 1 month"
+  or "Pipeline view: By month" states the choice.
+- **Controls on paper.** `print.css` selects data attributes and shadcn
+  `data-slot`s, never utility classes. It hides the header, sidebar, dialogs,
+  tooltips, inputs and every button except those marked `data-print-keep`: a
+  chart's legend doubles as its series switch, and some table rows name
+  themselves with a focus button, so those print as text.
+- **Slideshows** keep every slide mounted (each keeps its chosen variant) and
+  print them all in order; an expanded chart prints in place of its dialog.
+- **Light output.** Dark mode is one Tailwind `dark` variant, now scoped to
+  `screen`, so paper always gets the light palette.
+
+The component tests were ported to the new roles (toggle items are radios) and
+now cover chart readiness through the pending and error markers instead of image
+decoding. The Playwright suite was ported to the new DOM with real chart datasets
+in its fixtures; avatar requests to GitHub, which the dashboard makes by design
+(see `web/README.md`), are answered locally so the suite stays offline.
+
+Two behaviours needed new handling. An open Radix dialog (an expanded chart or a
+figure's explanation) ignores Escape and outside clicks while printing, so the
+key that dismisses the browser's print dialog cannot also close it; the dialog is
+a scroll box and opts in to scroll restore. An expanded chart prints in place
+while its dialog keeps its own copy mounted, so its open explanation and scroll
+position survive.
+
+Local verification after the port: 167 Vitest tests, and 21 Playwright tests in
+each of Chromium and Firefox. Lint, Prettier and the typecheck/build pass; lint
+keeps its five existing warnings and adds none. Printed output from real data was
+not re-reviewed in this pass.

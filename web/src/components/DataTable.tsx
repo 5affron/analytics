@@ -13,27 +13,56 @@
  * purely about what reaches the DOM.
  */
 
-import { useRef } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { flexRender } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { DataTableInstance } from '../useDataTable';
+import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, SearchIcon, XIcon } from 'lucide-react';
+import { cn } from 'cn';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { PRINT_ROW_LIMIT, usePrintMode } from '../printContext';
+import type { DataTableInstance } from '../useDataTable';
 
 // Typical rendered height of one row; the virtualiser corrects itself from
 // real measurements as rows mount, so this only has to be close.
-const ROW_HEIGHT = 27;
+const ROW_HEIGHT = 49;
+
+/** Text reads left, numbers right in tabular figures so their digits line up. */
+const align = (numeric?: boolean) => (numeric ? 'text-right tabular-nums' : undefined);
+/** On narrow screens the first column stays in view; its cells need an opaque background. */
+const STICKY_FIRST = 'max-md:sticky max-md:left-0 max-md:z-10';
 const OVERSCAN = 12;
 /** Below this, a table renders whole — the DOM cost is already negligible. */
 export const VIRTUALIZE_ABOVE = 100;
 
-export function DataTable({ table }: { table: DataTableInstance }) {
+export function DataTable({
+  table,
+  controls,
+  actions,
+}: {
+  table: DataTableInstance;
+  /** Beside the search: the switches that choose which rows (a time range). */
+  controls?: ReactNode;
+  /** At the toolbar's end: what a reader does with the rows (download, an external link). */
+  actions?: ReactNode;
+}) {
   const printing = usePrintMode();
   const scrollRef = useRef<HTMLDivElement>(null);
   const rows = table.getRowModel().rows;
   const globalFilter = (table.state.globalFilter as string) ?? '';
+  // Paper gets real rows, never a virtual window.
   const virtualized = !printing && rows.length > VIRTUALIZE_ABOVE;
   const virtualizer = useVirtualizer({
-    // Pause observation during printing, retaining the measured screen rows and offset.
+    // Observation pauses while printing, keeping the screen measurements and
+    // offset: restoring against the shorter printed table would lose them.
     count: rows.length > VIRTUALIZE_ABOVE ? rows.length : 0,
     getScrollElement: () => (printing ? null : scrollRef.current),
     estimateSize: () => ROW_HEIGHT,
@@ -45,10 +74,10 @@ export function DataTable({ table }: { table: DataTableInstance }) {
     virtualized && virtualRows.length
       ? virtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
       : 0;
-  const renderedRows = printing
+  const visibleRows = printing
     ? [
         ...rows.slice(0, PRINT_ROW_LIMIT),
-        // Retain the screen viewport beyond the cap so its focused links survive printing.
+        // The screen viewport beyond the cap stays mounted (hidden) so its focused links survive.
         ...virtualRows
           .filter((item) => item.index >= PRINT_ROW_LIMIT)
           .map((item) => rows[item.index]),
@@ -57,129 +86,193 @@ export function DataTable({ table }: { table: DataTableInstance }) {
       ? virtualRows.map((item) => rows[item.index])
       : rows;
   const columnCount = table.getVisibleFlatColumns().length;
+  const total = table.getCoreRowModel().rows.length;
+  const count = (n: number) => n.toLocaleString('en-US');
 
   return (
     <>
       {printing && globalFilter && (
         <p className="print-selection">
-          Filter: “{globalFilter}”. {rows.length} of {table.options.data.length} rows match; rows
-          outside this filter are not printed.
+          Filter: “{globalFilter}”. {count(rows.length)} of {count(total)} rows match; rows outside
+          this filter are not printed.
         </p>
       )}
       {printing && rows.length > PRINT_ROW_LIMIT && (
         <p className="print-selection" data-print-truncated>
-          Showing {PRINT_ROW_LIMIT} of {rows.length} rows in the current order.{' '}
-          {rows.length - PRINT_ROW_LIMIT} rows are not printed. Download CSV from this table on the
-          dashboard for the complete selection.
+          Showing {count(PRINT_ROW_LIMIT)} of {count(rows.length)} rows in the current order.{' '}
+          {count(rows.length - PRINT_ROW_LIMIT)} rows are not printed. Download CSV from this table
+          on the dashboard for the complete selection.
         </p>
       )}
-      <input
-        data-print-hide
-        className="search"
-        placeholder="Filter…"
-        aria-label="Filter rows"
-        value={globalFilter}
-        onChange={(event) => table.setGlobalFilter(event.target.value)}
-      />
-      <div className="tablewrap" ref={scrollRef} data-scroll-restore>
-        <table>
-          <thead>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => {
-                  const sorted = header.column.getIsSorted() as string;
-                  return (
-                    <th
-                      key={header.id}
-                      className={header.column.columnDef.meta?.numeric ? 'num' : undefined}
-                      aria-sort={
-                        sorted === 'asc'
-                          ? 'ascending'
-                          : sorted === 'desc'
-                            ? 'descending'
-                            : undefined
-                      }
-                    >
-                      {printing && flexRender(header.column.columnDef.header, header.getContext())}
-                      <button
-                        type="button"
-                        className="thbtn"
-                        hidden={printing}
-                        data-print-hide
-                        onClick={header.column.getToggleSortingHandler()}
-                      >
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                        {/* The mark's slot is always reserved so toggling sort never shifts the column. */}
-                        <span className="sortmark" aria-hidden="true">
-                          {{ asc: '↑', desc: '↓' }[sorted] ?? ''}
-                        </span>
-                      </button>
-                    </th>
-                  );
-                })}
-              </tr>
-            ))}
-          </thead>
-          <tbody>
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={columnCount} className="py-6 text-center text-[13px] text-muted">
-                  {globalFilter ? (
-                    <>
-                      {printing ? 'No rows match this filter.' : 'No rows match —'}{' '}
-                      <button
-                        type="button"
-                        hidden={printing}
-                        className="underline"
-                        onClick={() => table.setGlobalFilter('')}
-                      >
-                        clear the filter?
-                      </button>
-                    </>
-                  ) : (
-                    'No rows to show.'
-                  )}
-                </td>
-              </tr>
-            )}
-            {paddingTop > 0 && (
-              <tr aria-hidden="true">
-                <td colSpan={columnCount} style={{ height: paddingTop, padding: 0, border: 0 }} />
-              </tr>
-            )}
-            {renderedRows.map((row, index) => (
-              <tr
-                key={row.id}
-                hidden={printing && index >= PRINT_ROW_LIMIT}
-                data-index={virtualized ? virtualRows[index].index : index}
-                ref={virtualized ? virtualizer.measureElement : undefined}
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <td
-                    key={cell.id}
-                    className={
-                      cell.column.columnDef.meta?.numeric ||
-                      (printing && typeof row.original[cell.column.id] === 'number')
-                        ? 'num'
-                        : undefined
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="relative w-full sm:w-64" hidden={printing} data-print-hide>
+          <SearchIcon
+            aria-hidden="true"
+            className="pointer-events-none absolute top-2 left-2.5 size-4 text-muted-foreground"
+          />
+          <Input
+            placeholder="Search this table…"
+            aria-label="Filter rows"
+            value={globalFilter}
+            onChange={(event) => table.setGlobalFilter(event.target.value)}
+            className="h-8 bg-background pr-8 pl-8 text-xs"
+          />
+          {globalFilter && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Clear filter"
+              className="absolute top-1.5 right-1.5"
+              onClick={() => table.setGlobalFilter('')}
+            >
+              <XIcon />
+            </Button>
+          )}
+        </div>
+        {controls}
+        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+          <span role="status" className="text-xs text-muted-foreground tabular-nums">
+            {rows.length === total
+              ? `${count(total)} ${total === 1 ? 'row' : 'rows'}`
+              : `${count(rows.length)} of ${count(total)} rows`}
+          </span>
+          {actions}
+        </div>
+      </div>
+      <Table
+        containerRef={scrollRef}
+        // Capped height so a long table never traps the page scroll.
+        containerClassName="max-h-[min(520px,60dvh)] overflow-auto rounded-lg border"
+      >
+        <TableHeader className="sticky top-0 z-20">
+          {table.getHeaderGroups().map((headerGroup) => (
+            <TableRow key={headerGroup.id} className="hover:bg-transparent">
+              {headerGroup.headers.map((header, index) => {
+                const sorted = header.column.getIsSorted() as string;
+                const numeric = header.column.columnDef.meta?.numeric;
+                const SortIcon =
+                  sorted === 'asc'
+                    ? ArrowUpIcon
+                    : sorted === 'desc'
+                      ? ArrowDownIcon
+                      : ArrowUpDownIcon;
+                return (
+                  <TableHead
+                    key={header.id}
+                    data-numeric={numeric || undefined}
+                    aria-sort={
+                      sorted === 'asc' ? 'ascending' : sorted === 'desc' ? 'descending' : undefined
                     }
+                    className={cn(
+                      'h-10 border-b bg-muted/85 px-4 text-xs font-medium backdrop-blur-sm',
+                      sorted ? 'text-foreground' : 'text-muted-foreground',
+                      align(numeric),
+                      index === 0 && STICKY_FIRST,
+                    )}
+                  >
+                    {printing && (
+                      <span className="first-letter:uppercase">
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                      </span>
+                    )}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      hidden={printing}
+                      data-print-hide
+                      className={cn(
+                        'group/sort -mx-2 h-7 px-2 font-medium text-inherit hover:bg-background/70',
+                        numeric && 'flex-row-reverse',
+                      )}
+                      onClick={header.column.getToggleSortingHandler()}
+                    >
+                      {/* CSS sentence case keeps the accessible name as published. */}
+                      <span className="first-letter:uppercase">
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                      </span>
+                      {/* Always an icon, so sorting never shifts the column. */}
+                      <SortIcon
+                        data-icon={numeric ? 'inline-start' : 'inline-end'}
+                        aria-hidden="true"
+                        className={cn(
+                          'transition-opacity',
+                          sorted ? 'text-link' : 'opacity-30 group-hover/sort:opacity-70',
+                        )}
+                      />
+                    </Button>
+                  </TableHead>
+                );
+              })}
+            </TableRow>
+          ))}
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && (
+            <TableRow className="hover:bg-transparent">
+              <TableCell colSpan={columnCount} className="py-6 text-center text-muted-foreground">
+                {globalFilter ? (
+                  <>
+                    {printing ? 'No rows match this filter.' : 'No rows match —'}{' '}
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      hidden={printing}
+                      data-print-hide
+                      className="px-0"
+                      onClick={() => table.setGlobalFilter('')}
+                    >
+                      clear the filter?
+                    </Button>
+                  </>
+                ) : (
+                  'No rows to show.'
+                )}
+              </TableCell>
+            </TableRow>
+          )}
+          {paddingTop > 0 && (
+            <tr aria-hidden="true">
+              <td colSpan={columnCount} style={{ height: paddingTop, padding: 0, border: 0 }} />
+            </tr>
+          )}
+          {visibleRows.map((row, index) => (
+            <TableRow
+              key={row.id}
+              className="border-row-line even:bg-muted/20 hover:bg-link/5"
+              hidden={printing && index >= PRINT_ROW_LIMIT}
+              data-index={virtualized ? virtualRows[index].index : index}
+              ref={virtualized ? virtualizer.measureElement : undefined}
+            >
+              {row.getVisibleCells().map((cell, cellIndex) => {
+                // On paper any number aligns right, declared numeric or not.
+                const numeric =
+                  cell.column.columnDef.meta?.numeric ||
+                  (printing && typeof row.original[cell.column.id] === 'number');
+                return (
+                  <TableCell
+                    key={cell.id}
+                    data-numeric={numeric || undefined}
+                    className={cn(
+                      'px-4 py-2.5',
+                      align(numeric),
+                      cellIndex === 0 && ['font-medium max-md:bg-card', STICKY_FIRST],
+                    )}
                   >
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))}
-            {paddingBottom > 0 && (
-              <tr aria-hidden="true">
-                <td
-                  colSpan={columnCount}
-                  style={{ height: paddingBottom, padding: 0, border: 0 }}
-                />
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+                  </TableCell>
+                );
+              })}
+            </TableRow>
+          ))}
+          {paddingBottom > 0 && (
+            <tr aria-hidden="true">
+              <td colSpan={columnCount} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+            </tr>
+          )}
+        </TableBody>
+      </Table>
     </>
   );
 }

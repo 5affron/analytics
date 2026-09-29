@@ -129,6 +129,7 @@ def main(org: str = ORG) -> None:
 
     codeowners_summary_df = prepare_org_codeowners_summary(codeowners)
     if not codeowners_summary_df.empty:
+        save_dataframe(codeowners_summary_df, org_data_dir / "org_codeowner_summary.csv")
         plot_bar(
             df=codeowners_summary_df,
             x_col="status",
@@ -158,6 +159,7 @@ def main(org: str = ORG) -> None:
 
     runner_stacked_df = prepare_stacked_runner_summary(runners)
     if not runner_stacked_df.empty:
+        save_dataframe(runner_stacked_df, org_data_dir / "org_runner_summary.csv")
         plot_stacked_bar(
             df=runner_stacked_df,
             x_col="repo",

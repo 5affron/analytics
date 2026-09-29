@@ -56,6 +56,7 @@ from hiero_analytics.dashboard_spec import (
     MACRO_GLOSSARIES,
     MACRO_GROUP_ORDER,
     MACRO_PARENTS,
+    MACRO_SUMMARIES,
     METRIC_ANNOTATIONS,
     PROJECT_ISSUES_URL,
     TABLE_FAMILIES,
@@ -63,6 +64,7 @@ from hiero_analytics.dashboard_spec import (
     table_variants,
 )
 from hiero_analytics.domain.periods import ACTIVITY_PERIODS
+from hiero_analytics.export.chart_data import chart_document
 from hiero_analytics.export.csv_safety import sanitize_csv_text
 from hiero_analytics.export.macro_metrics import macro_metrics
 from hiero_analytics.provenance import resolve_provenance
@@ -296,7 +298,9 @@ def _org_chart_sections(org: str, org_data_dir: Path, org_dir: Path) -> list[dic
     a title and description; each chart inside carries its variant tabs
     (e.g. All / Active 90d), its "how to read this" note, its step-by-step
     methodology, and the wide flag (rendered as a horizontal scroll). Only
-    variants whose PNG was actually produced are listed.
+    variants whose PNG was actually produced are listed; one whose dataset
+    CSV also exists gains an ``interactive`` reference (an additive field, so
+    a consumer that only knows ``file`` still renders every listed variant).
     """
     chart_dir = paths.ORG_CHARTS_DIR / org
     sections = []
@@ -307,11 +311,29 @@ def _org_chart_sections(org: str, org_data_dir: Path, org_dir: Path) -> list[dic
         for spec in macro["charts"].get(org) or macro["charts"].get("*", []):
             charts = []
             for caption, variant_specs in spec["files"]:
-                variants = [
-                    _chart_variant(org, chart_dir, label, filename)
-                    for label, filename in variant_specs
-                    if (chart_dir / filename).exists()
-                ]
+                variants = []
+                for label, filename in variant_specs:
+                    # v1 is additive-only: ``file`` has always named a PNG that
+                    # exists, so a variant without one is not listed at all.
+                    if not (chart_dir / filename).exists():
+                        continue
+                    variant = _chart_variant(org, chart_dir, label, filename)
+                    source = spec.get("interactive_sources", {}).get(filename)
+                    if source and (csv_path := org_data_dir / source["file"]).exists():
+                        try:
+                            document = chart_document(source, csv_path, org, _read_meta(csv_path).get("generated_at"))
+                        except (ValueError, TypeError) as exc:
+                            raise DataApiContractError(f"Invalid chart dataset {org}/{source['file']}: {exc}") from exc
+                        _stamp_freshness(document, csv_path)
+                        # A source's own note describes the interactive view and wins over the PNG's.
+                        document = {**variant_annotations(filename), **document}
+                        # Keyed by the PNG stem, not the CSV: two charts can share one CSV.
+                        document["id"] = Path(filename).stem
+                        target = org_dir / "charts" / f"{document['id']}.json"
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(json.dumps(document, indent=1, allow_nan=False), encoding="utf-8")
+                        variant["interactive"] = {"kind": document["kind"], "path": f"{org}/charts/{target.name}"}
+                    variants.append(variant)
                 if not variants:
                     continue
                 filenames = [filename for _label, filename in variant_specs]
@@ -477,6 +499,8 @@ def emit_data_api() -> Path:
         "macro_parents": MACRO_PARENTS,
         # Why a tab may be empty for an org — shown in place of a blank tab.
         "macro_absent_notes": MACRO_ABSENT_NOTES,
+        # Each tab's one-line purpose, shown under its title.
+        "macro_summaries": MACRO_SUMMARIES,
         # Macro name -> ordered section-group names; the frontend renders each
         # tab as this sequence of named sections (views + charts + tables).
         "group_order": MACRO_GROUP_ORDER,

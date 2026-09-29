@@ -26,7 +26,7 @@ export function PrintLayout({
   // and stays mounted throughout printing, so selections cannot reset.
   return (
     <>
-      <p data-print-hide className="text-[12px] text-muted">
+      <p data-print-hide className="mb-3 text-xs text-muted-foreground">
         For page numbers, enable headers and footers in your browser’s print settings. Chrome and
         Edge also print the document’s own page numbers.
       </p>

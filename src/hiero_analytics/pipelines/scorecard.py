@@ -17,7 +17,7 @@ from hiero_analytics.data_sources.github_client import GitHubClient
 from hiero_analytics.data_sources.github_ingest import fetch_org_repos_graphql
 from hiero_analytics.data_sources.models import ScorecardRecord
 from hiero_analytics.data_sources.scorecard import fetch_repo_scorecard
-from hiero_analytics.export.save import plot_and_save
+from hiero_analytics.export.save import plot_and_save, save_dataframe
 from hiero_analytics.pipelines._shared import org_context
 from hiero_analytics.plotting.bars import plot_bar, plot_stacked_bar
 
@@ -29,7 +29,7 @@ def fetch_org_repos(client: GitHubClient, org: str):
     return fetch_org_repos_graphql(client, org)
 
 
-def fetch_all_scorecards(repos) -> list[ScorecardRecord]:
+def fetch_all_scorecards(repos, *, org: str = ORG) -> list[ScorecardRecord]:
     """Fetch scorecards for each repository in the organization.
 
     A transient failure is retried once; a second failure propagates, so the
@@ -41,10 +41,10 @@ def fetch_all_scorecards(repos) -> list[ScorecardRecord]:
         logger.info("Fetching scorecard (%d/%d): %s", i, len(repos), repo.name)
 
         try:
-            sc = fetch_repo_scorecard(repo.name)
+            sc = fetch_repo_scorecard(repo.name, org=org)
         except requests.RequestException:
             logger.warning("Scorecard fetch failed for %s; retrying once", repo.name)
-            sc = fetch_repo_scorecard(repo.name)
+            sc = fetch_repo_scorecard(repo.name, org=org)
         if sc:
             scorecards.append(sc)
 
@@ -53,7 +53,7 @@ def fetch_all_scorecards(repos) -> list[ScorecardRecord]:
 
 def main(org: str = ORG):
     """Fetch scorecards for all organisation repos and generate bar charts."""
-    client, _, org_charts_dir = org_context(org)
+    client, org_data_dir, org_charts_dir = org_context(org)
 
     repos = fetch_org_repos(client, org)
 
@@ -61,13 +61,14 @@ def main(org: str = ORG):
         logger.warning("No repositories found for org: %s", org)
         return
 
-    scorecards = fetch_all_scorecards(repos)
+    scorecards = fetch_all_scorecards(repos, org=org)
 
     if not scorecards:
         logger.warning("No scorecards fetched")
         return
 
     df = scorecard_to_dataframe(scorecards)
+    save_dataframe(df, org_data_dir / "org_scorecard.csv")
     plot_and_save(
         df,
         plot_bar,
@@ -78,6 +79,8 @@ def main(org: str = ORG):
     )
 
     df_stacked = scorecard_stacked_dataframe(scorecards)
+    # -1 (inconclusive) is kept and unreported checks stay blank, never a zero score.
+    save_dataframe(scorecard_stacked_dataframe(scorecards, missing=None), org_data_dir / "org_scorecard_checks.csv")
     plot_and_save(
         df_stacked,
         plot_stacked_bar,
