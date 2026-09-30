@@ -10,6 +10,11 @@ for assembly.
 
 from __future__ import annotations
 
+from hiero_analytics.dashboard_spec.interactive import HIP_STATUS_SOURCE
+
+# One line under the tab's title saying what the tab is for.
+SUMMARY = "Follow improvement proposals from discussion to implementation."
+
 # Shown when the selected org has no content for this tab.
 ABSENT_NOTE = (
     "The HIP process — specs in the hiero-ledger governance repo and the PRs that "
@@ -33,9 +38,37 @@ CHART_MACRO = {
                 ),
                 "files": [("Funnel", "hip_adoption_funnel.png")],
                 "csv": "hip_adoption_funnel.csv",
+                "interactive_sources": {
+                    "hip_adoption_funnel.png": {
+                        "kind": "categories",
+                        "file": "hip_adoption_funnel.csv",
+                        "category": "stage",
+                        "category_label": "Stage",
+                        "group": {"key": "cohort", "label": "Cohort", "default": "created since 2024-09"},
+                        "series": [{"key": "hips", "label": "HIPs", "color": "var(--heat-4)"}],
+                        "details": [{"key": "pct_of_proposed", "label": "Share of proposed", "format": "percent"}],
+                        # Each stage is a subset of the one before, so it draws as a funnel.
+                        "mark": "funnel",
+                        "orientation": "horizontal",
+                        "window": "snapshot",
+                        "metric": "hip_adoption_funnel",
+                        "unit": "HIP specs",
+                        "population": (
+                            "Each HIP spec in the cohort is counted at every stage it has reached, so each "
+                            "stage is a subset of the one before. Shares are of the cohort's proposed specs. "
+                            "Citation-based stages undercount specs created before September 2024."
+                        ),
+                        "note": (
+                            "Stages run top to bottom: proposed, approved by the TSC, merged implementation "
+                            "evidence found, and merged citing PRs in five or more repositories. Switch the "
+                            "cohort to compare recent specs with all specs; the two are never combined."
+                        ),
+                    }
+                },
             },
             {
                 "id": "hip-activity-by-status",
+                "interactive_sources": {"hip_activity_by_status.png": HIP_STATUS_SOURCE},
                 "group": "Adoption",
                 "title": "Implementation evidence — approved & final specs",
                 "description": (
@@ -59,6 +92,30 @@ CHART_MACRO = {
                 ),
                 "files": [("Repositories by distinct HIPs", "hip_repo_engagement.png")],
                 "csv": "hip_repo_engagement.csv",
+                "interactive_sources": {
+                    "hip_repo_engagement.png": {
+                        "kind": "categories",
+                        "file": "hip_repo_engagement.csv",
+                        "category": "repo",
+                        "category_label": "Repository",
+                        "strip_org_prefix": True,
+                        "series": [{"key": "distinct_hips_merged", "label": "Distinct HIPs", "color": "var(--heat-4)"}],
+                        "details": [
+                            {"key": "matched_prs", "label": "Merged PRs citing a HIP"},
+                            {"key": "total_prs", "label": "All merged PRs"},
+                        ],
+                        "orientation": "horizontal",
+                        "rank": True,
+                        "top_n": 15,
+                        "window": "all",
+                        "metric": "hip_repo_engagement",
+                        "unit": "Distinct HIPs",
+                        "population": (
+                            "Distinct HIP specs cited by merged pull requests in each repository, over all "
+                            "recorded history. Repositories with no citing PRs keep their zero rows."
+                        ),
+                    }
+                },
             },
         ],
     },

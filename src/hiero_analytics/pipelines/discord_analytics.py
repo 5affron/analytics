@@ -29,13 +29,14 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pandas as pd
 
 from hiero_analytics.config.charts import MUTED_HISTORICAL_COLOR, PRIMARY_PALETTE
 from hiero_analytics.config.paths import INPUTS_DIR, ensure_org_dirs
+from hiero_analytics.export.save import save_dataframe, write_output_meta
 from hiero_analytics.plotting.bars import plot_bar, plot_stacked_bar
 from hiero_analytics.plotting.lines import plot_date_line
 
@@ -92,6 +93,12 @@ def load_channels_df() -> pd.DataFrame:
             f"Channels CSV not found at {path}. Place the snapshot there or set HIERO_DISCORD_CHANNELS_CSV."
         )
     df = pd.read_csv(path)
+    for row in df.itertuples():
+        if not (row.d30 <= row.d90 <= row.d365 <= row.total):
+            raise ValueError(
+                f"Channel {row.channel!r} violates d30<=d90<=d365<=total: "
+                f"d30={row.d30}, d90={row.d90}, d365={row.d365}, total={row.total}"
+            )
     df["channel_label"] = "#" + df["channel"]
     df["category"] = df["channel"].apply(_categorize_channel)
     return df
@@ -131,17 +138,22 @@ def plot_recent_activity_30d(channels: pd.DataFrame, output_path: Path, top_n: i
     )
 
 
-def plot_category_breakdown(channels: pd.DataFrame, output_path: Path) -> None:
-    """Channel grouping by topical category — total vs last-90-day activity."""
+def category_breakdown(channels: pd.DataFrame) -> pd.DataFrame:
+    """Messages per topical category: all-time, last 90 days, and the earlier remainder, busiest first."""
     grouped = (
         channels.groupby("category", as_index=False)
         .agg(total=("total", "sum"), last_90d=("d90", "sum"))
-        .sort_values("total", ascending=False)
+        .sort_values("total", ascending=False, kind="stable")
+        .reset_index(drop=True)
     )
+    grouped["earlier"] = grouped["total"] - grouped["last_90d"]
+    return grouped
+
+
+def plot_category_breakdown(categories: pd.DataFrame, output_path: Path) -> None:
+    """Channel grouping by topical category — total vs last-90-day activity."""
     plot_stacked_bar(
-        df=grouped.rename(columns={"total": "earlier", "last_90d": "last 90 days"}).assign(
-            earlier=lambda d: d["earlier"] - d["last 90 days"]
-        ),
+        df=categories.rename(columns={"last_90d": "last 90 days"}),
         x_col="category",
         stack_cols=["last 90 days", "earlier"],
         labels=["Last 90 days", "Earlier history"],
@@ -172,13 +184,24 @@ def plot_monthly_traffic(series: pd.DataFrame, output_path: Path) -> None:
 
 def main() -> None:
     """Generate the Hiero Discord chart bundle."""
-    _, charts_dir = ensure_org_dirs(ORG)
+    data_dir, charts_dir = ensure_org_dirs(ORG)
 
     channels = load_channels_df()
     monthly = load_monthly_df()
 
+    categories = category_breakdown(channels)
+    save_dataframe(categories, data_dir / "hiero_discord_channel_categories.csv")
+    save_dataframe(channels[["channel_label", "d30"]], data_dir / "hiero_discord_recent_activity_30d.csv")
+    save_dataframe(monthly, data_dir / "hiero_discord_monthly_traffic.csv")
+
+    for name in ("channel_categories", "recent_activity_30d", "monthly_traffic"):
+        write_output_meta(
+            data_dir / f"hiero_discord_{name}.csv",
+            generated_at=datetime.combine(SNAPSHOT_DATE, datetime.min.time(), tzinfo=UTC),
+        )
+
     plot_monthly_traffic(monthly, charts_dir / "hiero_discord_monthly_traffic.png")
     plot_recent_activity_30d(channels, charts_dir / "hiero_discord_recent_activity_30d.png")
-    plot_category_breakdown(channels, charts_dir / "hiero_discord_channel_categories.png")
+    plot_category_breakdown(categories, charts_dir / "hiero_discord_channel_categories.png")
 
     logger.info("Hiero Discord charts written to %s", charts_dir)

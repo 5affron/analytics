@@ -170,10 +170,27 @@ def test_plot_recent_activity_30d_filters_zero_d30_and_caps_top_n(channels_csv: 
     assert "#hiero-hips" not in passed_df["channel_label"].tolist()
 
 
+def test_category_breakdown_ranks_categories_and_splits_recent_from_earlier() -> None:
+    """The chart and its CSV share one frame: busiest category first, earlier = total - last 90 days."""
+    channels = pd.DataFrame(
+        {
+            "category": ["Dev", "General", "Dev", "Events"],
+            "total": [100, 300, 50, 10],
+            "d90": [40, 20, 10, 10],
+        }
+    )
+    categories = runner.category_breakdown(channels)
+    assert categories.to_dict("records") == [
+        {"category": "General", "total": 300, "last_90d": 20, "earlier": 280},
+        {"category": "Dev", "total": 150, "last_90d": 50, "earlier": 100},
+        {"category": "Events", "total": 10, "last_90d": 10, "earlier": 0},
+    ]
+
+
 def test_plot_category_breakdown_writes_png(tmp_path: Path, channels_csv: Path) -> None:
     """Test that plot_category_breakdown writes a PNG file."""
     output = tmp_path / "categories.png"
-    runner.plot_category_breakdown(runner.load_channels_df(), output)
+    runner.plot_category_breakdown(runner.category_breakdown(runner.load_channels_df()), output)
 
     assert output.exists() and output.stat().st_size > 0
 
@@ -213,3 +230,49 @@ def test_main_writes_three_charts(
     assert expected == actual
     for png in charts_dir.glob("*.png"):
         assert png.stat().st_size > 0
+
+
+def test_main_exports_chart_data_at_manual_snapshot_date(channels_csv, monthly_csv, tmp_path, monkeypatch):
+    """Rerendering a manual archive must not extend its calendar series to today."""
+    import json
+
+    from hiero_analytics.dashboard_spec.interactive import DISCORD_SOURCES
+    from hiero_analytics.export.chart_data import chart_document
+
+    data_dir = tmp_path / "data"
+    charts_dir = tmp_path / "charts"
+    monkeypatch.setattr(runner, "ensure_org_dirs", lambda _org: (data_dir, charts_dir))
+    for name in ("plot_monthly_traffic", "plot_recent_activity_30d", "plot_category_breakdown"):
+        monkeypatch.setattr(runner, name, lambda *_args: None)
+    runner.main()
+    documents = {}
+    for name, source in DISCORD_SOURCES.items():
+        path = data_dir / source["file"]
+        stamp = json.loads(Path(f"{path}.meta.json").read_text())["generated_at"]
+        documents[name] = chart_document(source, path, "hiero-ledger", stamp)
+        assert stamp.startswith("2026-05-12")
+    assert documents["hiero_discord_monthly_traffic.png"]["rows"][-1]["bucket"] == "2026-05"
+    categories = documents["hiero_discord_channel_categories.png"]["rows"]
+    assert sum(row["earlier"] + row["last_90d"] for row in categories) == 911
+    assert len(documents["hiero_discord_recent_activity_30d.png"]["rows"]) == 6
+
+
+# --------------------------------------------------------------------------- #
+# Invariant Validation tests
+# --------------------------------------------------------------------------- #
+
+
+def test_load_channels_df_valid_invariants(channels_csv: Path) -> None:
+    """Test that load_channels_df succeeds when d30 <= d90 <= d365 <= total."""
+    df = runner.load_channels_df()
+    assert len(df) == 6
+
+
+def test_load_channels_df_violates_invariant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that load_channels_df raises ValueError when d30 <= d90 <= d365 <= total is violated."""
+    invalid_csv = tmp_path / "invalid_channels.csv"
+    invalid_csv.write_text("channel,last_message,d30,d90,d365,total\ndev-chat,2026-05-01,100,50,200,300\n")
+    monkeypatch.setenv("HIERO_DISCORD_CHANNELS_CSV", str(invalid_csv))
+
+    with pytest.raises(ValueError, match="violates d30<=d90<=d365<=total"):
+        runner.load_channels_df()

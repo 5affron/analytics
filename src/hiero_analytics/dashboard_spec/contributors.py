@@ -9,6 +9,16 @@ the package __init__ for assembly.
 from __future__ import annotations
 
 from hiero_analytics.dashboard_spec.glossary import glossary_of
+from hiero_analytics.dashboard_spec.interactive import (
+    ACTIVITY_HEATMAP_SOURCES,
+    CONTRIBUTOR_HEATMAP,
+    CONTRIBUTOR_NETWORK,
+    OVERVIEW_SOURCES,
+    REPO_GROWTH_SOURCES,
+)
+
+# One line under the tab's title saying what the tab is for.
+SUMMARY = "Explore the people behind Hiero. Follow contribution activity, collaboration, and community growth."
 
 CHART_MACRO = {
     "name": "Contributors",
@@ -27,6 +37,7 @@ CHART_MACRO = {
                     "(maintainers, committers, triage) live in the Governance tab. Click to enlarge."
                 ),
                 "files": [("Repositories linked by shared contributors", "all_network.png")],
+                "interactive_sources": {"all_network.png": CONTRIBUTOR_NETWORK},
             },
             {
                 "id": "activity-heatmap",
@@ -34,7 +45,7 @@ CHART_MACRO = {
                 "group": "Activity & networks",
                 "slideshow": True,
                 "description": (
-                    "Weighted monthly activity over the last six months (greener = more active). Slide "
+                    "Weighted monthly activity over the last six months (stronger colour = more active). Slide "
                     "through the same activity zooming steadily out — from each individual contributor, "
                     "to their governance team, to their employer, and finally to the repositories the "
                     "work lands in. For employer concentration and authority risk, see the Governance tab."
@@ -45,6 +56,7 @@ CHART_MACRO = {
                     ("By organisation", "org_activity_heatmap.png"),
                     ("By repository", "repo_activity_heatmap.png"),
                 ],
+                "interactive_sources": ACTIVITY_HEATMAP_SOURCES,
             },
             {
                 "id": "repo-growth",
@@ -59,11 +71,13 @@ CHART_MACRO = {
                     ("New repos per month", "repos_created_per_month.png"),
                     ("Cumulative repo count", "cumulative_repo_count.png"),
                 ],
+                "interactive_sources": REPO_GROWTH_SOURCES,
             },
         ],
         "hiero-hackers": [
             {
                 "id": "org-overview",
+                "interactive_sources": OVERVIEW_SOURCES,
                 "title": "Organization overview (org-wide)",
                 "group": "Org overview",
                 "description": (
@@ -85,6 +99,7 @@ CHART_MACRO = {
                     "linked when they share contributors. Colour = repository type. Click to enlarge."
                 ),
                 "files": [("Repositories linked by shared contributors", "all_network.png")],
+                "interactive_sources": {"all_network.png": CONTRIBUTOR_NETWORK},
             },
             {
                 "id": "activity-heatmap",
@@ -95,6 +110,7 @@ CHART_MACRO = {
                     "months (greener = more active that month)."
                 ),
                 "files": [("Activity heatmap", "contributor_activity_heatmap.png")],
+                "interactive_sources": {"contributor_activity_heatmap.png": CONTRIBUTOR_HEATMAP},
             },
             {
                 "id": "repo-growth",
@@ -109,6 +125,7 @@ CHART_MACRO = {
                     ("New repos per month", "repos_created_per_month.png"),
                     ("Cumulative repo count", "cumulative_repo_count.png"),
                 ],
+                "interactive_sources": REPO_GROWTH_SOURCES,
             },
         ],
     },
@@ -178,21 +195,22 @@ CHART_NOTES = {
     "share contributors. Bubble colour is the repo's category; the link threshold scales with org size.",
     "contributor_activity_heatmap.png": "Rows are the 25 busiest contributors over the last six months; columns are those months. The "
     "colour and number in each cell are a weighted activity score (issues ×2, reviews ×3, PRs opened "
-    "×3, merges ×2) for that month — greener = more active, redder = less. Bots are excluded.",
+    "×3, merges ×2) for that month — darker blue = more active. Bots are excluded.",
     "org_activity_heatmap.png": "Rows are organisations, columns are the last six months; each cell is that org's people's "
-    "weighted activity that month (issues ×2, reviews ×3, PRs opened ×3, merges ×2) — greener = more "
-    "active. It shows which employers carry the work over time, the activity counterpart to the "
+    "weighted activity that month (issues ×2, reviews ×3, PRs opened ×3, merges ×2) — darker blue = "
+    "more active. It shows which employers carry the work over time, the activity counterpart to the "
     "head-count chart. Bots and contributors not mapped to an organisation are excluded.",
     "team_activity_heatmap.png": "Rows are governance teams, columns are the last six months; each cell is the weighted activity of "
     "the team's members that month (same weights as the other heatmaps). A contributor on several teams "
     "counts toward each, so team totals overlap — this measures each team's activity, not a partition. "
     "The 25 busiest teams are shown; bots are excluded.",
     "repo_activity_heatmap.png": "Rows are repositories, columns are the last six months; each cell is the repo's weighted activity "
-    "that month (issues ×2, reviews ×3, PRs opened ×3, merges ×2) — greener = more active. Aggregated "
+    "that month (issues ×2, reviews ×3, PRs opened ×3, merges ×2) — darker blue = more active. Aggregated "
     "straight from the events, so each counts once. The 25 busiest repositories are shown; bots are "
     "excluded.",
-    "contributor_counts.png": "The 20 repositories with the most distinct contributors over the last six months; bar height is "
-    "the number of unique contributors.",
+    "contributor_counts.png": "Repositories ranked by distinct contributors over the last six months; bar height is the "
+    "number of unique contributors. The static image shows the top 20; the interactive view and CSV hold every "
+    "repository.",
     "language_distribution.png": "How many repositories use each primary language (current snapshot). Repositories with no "
     "detected language are grouped as 'Unknown'.",
     "push_activity.png": "The share of repositories that received a push in the last 30 days (active) versus those that "
@@ -227,7 +245,7 @@ CHART_METHODOLOGY = {
     "contributor_counts.png": [
         "Take the org-wide contributor activity records for the Hiero Hackers organisation.",
         "Count the distinct contributors active in each repository.",
-        "Keep the top 20 repositories by that count.",
+        "Rank the repositories by that count; the static image keeps the top 20, the CSV keeps them all.",
     ],
     "language_distribution.png": [
         "List the organisation's repositories and read GitHub's primary-language field for each.",

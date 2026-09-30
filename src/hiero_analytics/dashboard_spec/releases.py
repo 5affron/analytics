@@ -9,6 +9,11 @@ the package __init__ for assembly.
 
 from __future__ import annotations
 
+from hiero_analytics.dashboard_spec.interactive import RELEASE_TIMELINE_SOURCES
+
+# One line under the tab's title saying what the tab is for.
+SUMMARY = "Follow release activity and delivery across the ecosystem."
+
 # Shown when the selected org has no content for this tab.
 ABSENT_NOTE = "No releases pipeline data for this org yet."
 
@@ -41,6 +46,7 @@ CHART_MACRO = {
                         ],
                     ),
                 ],
+                "interactive_sources": RELEASE_TIMELINE_SOURCES,
             },
         ],
     },

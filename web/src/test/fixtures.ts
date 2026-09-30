@@ -1,11 +1,11 @@
 /**
  * A miniature but structurally complete data API: two orgs, one macro with
  * charts + tables + metrics (only for the primary org) and one macro both
- * orgs share, so org-tab behaviour is exercised. `stubApi` serves it through
- * a fetch stub keyed by URL suffix — the same contract the real API honours.
+ * orgs share, so org-tab behaviour is exercised. The component suite serves these
+ * routes through `stubApi`; the browser suite writes them to a static API tree.
+ * Keep this module plain data so both runners can use the same typed contract.
  */
 
-import { vi } from 'vitest';
 import type { BoardView, Manifest, MatrixView, SectionDoc } from '../api';
 
 export const GOV_DOC: SectionDoc = {
@@ -171,6 +171,7 @@ export const ALL_FORMATS_DOC: SectionDoc = {
     { key: 'flag', label: 'flag', format: 'flag' },
     { key: 'presence', label: 'presence', format: 'presence' },
     { key: 'number', label: 'number', format: 'number' },
+    { key: 'percent', label: 'share %', format: 'percent' },
     { key: 'staleness', label: 'staleness', format: 'staleness' },
   ],
   rows: [
@@ -183,6 +184,7 @@ export const ALL_FORMATS_DOC: SectionDoc = {
       flag: 'true',
       presence: 'true',
       number: 2490,
+      percent: 62,
       staleness: 'overdue',
     },
   ],
@@ -299,6 +301,7 @@ export const MANIFEST: Manifest = {
   },
   period_labels: { '30d': '1 month' },
   issues_url: 'https://example.test/issues',
+  macro_summaries: { Governance: 'Who holds which role, and where.' },
   macro_absent_notes: {
     Governance:
       "Governance analytics need a published governance config; this org doesn't have one.",
@@ -477,7 +480,7 @@ export const MANIFEST: Manifest = {
   },
 };
 
-const ROUTES: Record<string, unknown> = {
+export const ROUTES: Record<string, unknown> = {
   'manifest.json': MANIFEST,
   'hiero-ledger/roles.json': GOV_DOC,
   'hiero-ledger/hip-evidence.json': HIP_EVIDENCE_DOC,
@@ -491,28 +494,3 @@ const ROUTES: Record<string, unknown> = {
   'hiero-ledger/maintainer_affiliations.csv': 'login,organisation\nalice,Hashgraph\n',
   'hiero-ledger/committer_affiliations.csv': 'login,organisation\ndave,BlockyDevs\n',
 };
-
-/**
- * Stub global fetch to serve the fixture API; returns the spy for assertions.
- * `overrides` lets a test intercept specific routes (e.g. to delay or fail a
- * request) while every other route still serves its normal fixture — so a
- * test controlling one request doesn't have to also know every other request
- * the page happens to make.
- */
-export function stubApi(overrides: Record<string, () => Response | Promise<Response>> = {}) {
-  return vi.stubGlobal(
-    'fetch',
-    vi.fn(async (url: string) => {
-      const key = String(url);
-      const override = Object.entries(overrides).find(([suffix]) => key.endsWith(suffix));
-      if (override) return override[1]();
-      const match = Object.entries(ROUTES).find(([suffix]) => key.endsWith(suffix));
-      if (!match) {
-        return new Response('not found', { status: 404 });
-      }
-      // CSV companions are served verbatim; everything else is a JSON document.
-      const body = typeof match[1] === 'string' ? match[1] : JSON.stringify(match[1]);
-      return new Response(body, { status: 200 });
-    }),
-  );
-}
